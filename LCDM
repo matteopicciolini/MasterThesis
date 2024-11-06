@@ -1,0 +1,37 @@
+is_sham                    =    F
+is_old_sham                =    F
+is_hod                     =    F
+is_sub                     =    F
+is_fof                     =    F
+is_halo                    =    T
+save_mock                  =    T
+full_random                =    F
+InputDir                   =    /workplace/wp2d/DEMNUnii/LCDM_new/groups_ascii
+InputDirSub                =    /workplace/wp2d/DEMNUnii/LCDM_new/subs_ascii
+BaseName                   =    LCDM
+BaseNameSub                =    M_Crit200
+OutputMockDir              =    LCDM_halos_Mc200
+Output_HealpixDir          =    LCDM_halos_Mc200_HLPX
+OutputMassHist             =    LCDM_halos_Mc200_FOFZ
+ListOfRedshift             =    DEMNUNII_SNAPS_inv.txt
+
+OmegaCDM                   =    0.27
+OmegaBr                    =    0.05
+OmegaNeu                   =    0.00
+OmegaLambda                =    0.68
+h_Hubble                   =    0.67
+BoxSize                    =    2000000 # kpc/h
+
+HealpixNside               =    512
+
+NumOfSnapshotFiles         =    63
+FirstSnap                  =    62
+LastSnap                   =    16
+
+UnitVelocity_in_cm_per_s   =    100000
+UnitLength_in_cm           =    3.08568e+21 # kpc/h
+UnitMass_in_g              =    1.98855e+43
+GravityConstantInternal    =    0.0
+
+NumOfClasses               =    40
+

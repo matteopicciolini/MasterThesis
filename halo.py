@@ -141,7 +141,7 @@ class HaloCatalog:
         vel_y = self.halos['vel_y']
         vel_z = self.halos['vel_z']
         velocities = np.vstack((vel_x, vel_y, vel_z)).T  # Stack velocity components into a 2D array
-        return np.linalg.norm(velocities, axis=1)  # Compute the magnitude of velocity for each halo
+        return np.linalg.norm(velocities, axis=1) * (1 + self.redshift) # Compute the magnitude of velocity for each halo
 
 
 class HaloCatalogManager:
