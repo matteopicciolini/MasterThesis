@@ -1,6 +1,7 @@
 import numpy as np
 import healpy as hp
 import os
+from astropy.cosmology import LambdaCDM
 
 
 class HaloCatalog:
@@ -187,7 +188,7 @@ class HaloCatalogManager:
         all_halos = np.concatenate([catalog.halos for catalog in self.catalogs])
         return all_halos
 
-    def get_all_halos(self, n_side: int = 4096) -> 'AllHalosFromCatalogs':
+    def get_all_halos(self, n_side: int = 4096) -> 'Halos':
         """
         Combines all halos and maps them to Healpix pixels.
 
@@ -205,7 +206,7 @@ class HaloCatalogManager:
         phi = np.concatenate(self.phi)
         snapshots = np.concatenate(self.snapshot)
         redshifts = np.concatenate(self.redshift)
-        return AllHalosFromCatalogs(theta, phi, snapshots, redshifts, self.snapshot_numbers, n_side)
+        return Halos(theta, phi, snapshots, redshifts, self.snapshot_numbers, n_side)
 
     def select_mass_above(self, mass_limit: float) -> 'HaloCatalogManager':
         """
@@ -260,8 +261,38 @@ class HaloCatalogManager:
         """Returns an array of redshifts for all halos in each catalog."""
         return [np.full(len(catalog.halos), catalog.redshift) for catalog in self.catalogs]
 
+def lens_weight(z_l, z_s=1100):
+    # Cosmological parameters
+    OmegaCDM = 0.27  # Dark matter density
+    OmegaBr = 0.05  # Baryonic matter density
+    OmegaNeu = 0.00  # Neutrino density
+    OmegaLambda = 0.68  # Dark energy density
+    h_Hubble = 0.67  # Normalized Hubble parameter
 
-class AllHalosFromCatalogs:
+    # Initialize the cosmological model
+    cosmo = LambdaCDM(H0=h_Hubble * 100, Om0=OmegaCDM + OmegaBr, Ode0=OmegaLambda)
+
+    # Calculate the comoving distance for `z_l`
+    d_comov_l = np.array(cosmo.comoving_distance(z_l))
+
+    # If `z_s` is a scalar, calculate directly
+    if np.isscalar(z_s):
+        if z_s == 0.:
+            return 0.  # Return 0 if `z_s` is zero
+        d_comov_s = np.array(cosmo.comoving_distance(z_s))
+        return (d_comov_s - d_comov_l) / d_comov_s
+
+    # If `z_s` is an array, calculate element by element
+    d_comov_s = np.array(cosmo.comoving_distance(z_s))
+
+    # Calculate the lens weight with handling for elements in `z_s` equal to 0
+    np.seterr(invalid='ignore')
+    lens_weights = np.where(np.isclose(d_comov_s, 0.), 0., (d_comov_s - d_comov_l) / d_comov_s)
+
+    return lens_weights
+
+
+class Halos:
     """
     Represents all halos from multiple catalogs and maps them to Healpix pixels.
 
@@ -308,17 +339,27 @@ class AllHalosFromCatalogs:
         path : str, optional
             The path where the convergence maps are located (default is an empty string).
         """
+        # Single values
+        self.snapshot_numbers = snapshot_numbers  # Without repetition
+        self.n_side = n_side
+        self.path = path
+
+
+        # Halos data
         self.theta = theta
         self.phi = phi
         self.pixels = hp.ang2pix(n_side, theta, phi)  # Convert angular coordinates to Healpix pixel indices
         self.snapshots = snapshots
         self.redshifts = redshifts
-        self.snapshot_numbers = snapshot_numbers
-        self.n_side = n_side
-        self.path = path
-        self.convergence_halos = self.update_convergence_halos()
+        self.n_halos = len(self.theta) # Single value
+        self.convergence = self.update_convergence()
 
-    def update_convergence_halos(self):
+
+
+
+
+
+    def update_convergence(self):
         """
         Updates the halo convergence by adding halo data from each snapshot.
 
@@ -327,25 +368,32 @@ class AllHalosFromCatalogs:
         numpy.ndarray
             Array containing the updated halo convergence data.
         """
-        convergence_halos = np.zeros(hp.nside2npix(self.n_side),
-                                     dtype=np.float32)  # Initialize an empty convergence map
 
+
+        data = np.loadtxt(f'{self.path}new_cosmoint_results.txt', skiprows=1)
+        cmb_weights = data[:, -1]
+        z_ls = data[:, 1]
+
+        convergence_halos = np.zeros(self.n_halos)
         for snapshot in self.snapshot_numbers[::-1]:
+            cmb_wight = cmb_weights[np.where(data[:, 0] == snapshot)[0][0]]
+            z_l = z_ls[np.where(data[:, 0] == snapshot)[0][0]]
+
             map_file = f'{self.path}KappaMap_snap_{snapshot:03d}.DM.seed_100672.fits'
             print(f"Reading {map_file}")
 
             # Read the convergence map for the current snapshot
-            convergence_map = hp.read_map(map_file, dtype=np.float32)
+            pso = (1./cmb_wight)
+            convergence_map = pso * hp.read_map(map_file, dtype=np.float32)
 
-            # Find valid indices for the current snapshot
-            valid_indices = np.where(self.snapshots <= snapshot)
-            pixels = self.pixels[valid_indices]
-
-            # Update the halo convergence map
-            convergence_halos[pixels] += convergence_map[pixels]
+            mask = self.snapshots < snapshot
+            l_weights = lens_weight(z_l, self.redshifts[mask])
+            convergence_halos[mask] += l_weights * convergence_map[self.pixels[mask]]
 
             # Remove temporary variables to free memory
             del convergence_map
-            del valid_indices
+            del mask
+            del l_weights
+
 
         return convergence_halos
