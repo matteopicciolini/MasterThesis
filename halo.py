@@ -383,8 +383,7 @@ class Halos:
             print(f"Reading {map_file}")
 
             # Read the convergence map for the current snapshot
-            pso = (1./cmb_wight)
-            convergence_map = pso * hp.read_map(map_file, dtype=np.float32)
+            convergence_map = (1./cmb_wight) * hp.read_map(map_file, dtype=np.float32)
 
             mask = self.snapshots < snapshot
             l_weights = lens_weight(z_l, self.redshifts[mask])
