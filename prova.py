@@ -7,15 +7,18 @@ OmegaCDM = 0.27  # Densità di materia oscura
 OmegaBr = 0.05   # Densità di materia barionica
 OmegaNeu = 0.00  # Densità di neutrini
 OmegaLambda = 0.68  # Densità di energia oscura
-h_Hubble = 0.67  # Hubble normalizzato
+h_Hubble = 0.67  # Hubble
 
 # Creazione dell'oggetto LambdaCDM
 cosmo = LambdaCDM(H0=h_Hubble * 100, Om0=OmegaCDM + OmegaBr, Ode0=OmegaLambda)
 
 # Redshift della CMB
-z_cmb = 1100  # Redshift della CMB
-z_1 = 49.4806
-# Calcolo della distanza comovente a redshift z_cmb
-D_comov = cosmo.comoving_distance(z_cmb)
-D_comov2 = cosmo.comoving_distance(z_1)
-print((D_comov-D_comov2)/D_comov)
+z_cmb = 0.5  # Redshift della CMB
+z_1 = 0.018150
+z_2 = 0.055450
+
+D_comov_1 = cosmo.comoving_distance(z_1)
+print(D_comov_1 * 1e3 * h_Hubble)
+
+D_comov_2= cosmo.comoving_distance(z_2)
+print(D_comov_2 * 1e3 * h_Hubble)

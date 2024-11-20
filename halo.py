@@ -1,6 +1,7 @@
 import numpy as np
 import healpy as hp
 import os
+import gc
 from astropy.cosmology import LambdaCDM
 
 
@@ -291,6 +292,14 @@ def lens_weight(z_l, z_s=1100):
 
     return lens_weights
 
+class SingleHalo:
+    def __init__(self, theta, phi, pixel, snap, redshift, convergence):
+        self.theta = theta
+        self.phi = phi
+        self.pixel = pixel
+        self.snap = snap
+        self.redshift = redshift
+        self.convergence = convergence
 
 class Halos:
     """
@@ -354,11 +363,6 @@ class Halos:
         self.n_halos = len(self.theta) # Single value
         self.convergence = self.update_convergence()
 
-
-
-
-
-
     def update_convergence(self):
         """
         Updates the halo convergence by adding halo data from each snapshot.
@@ -371,21 +375,32 @@ class Halos:
 
 
         data = np.loadtxt(f'{self.path}new_cosmoint_results.txt', skiprows=1)
-        cmb_weights = data[:, -1]
-        z_ls = data[:, 1]
+        snapshots_params = {int(row[0]): (row[-1], row[1]) for row in data}
 
         convergence_halos = np.zeros(self.n_halos)
         for snapshot in self.snapshot_numbers[::-1]:
-            cmb_wight = cmb_weights[np.where(data[:, 0] == snapshot)[0][0]]
-            z_l = z_ls[np.where(data[:, 0] == snapshot)[0][0]]
-
+            cmb_wight, z_l = snapshots_params[snapshot]
+            print(f"-------------- {z_l, snapshot} --------------")
             map_file = f'{self.path}KappaMap_snap_{snapshot:03d}.DM.seed_100672.fits'
-            print(f"Reading {map_file}")
 
             # Read the convergence map for the current snapshot
+            print(f"Reading {map_file}...")
             convergence_map = (1./cmb_wight) * hp.read_map(map_file, dtype=np.float32)
+            n_side_original_map = hp.get_nside(convergence_map)
 
+            # Downgrade
+            if self.n_side != n_side_original_map:
+                if self.n_side < n_side_original_map:
+                    print(f"Downgrading {map_file}...")
+                    convergence_map = hp.ud_grade(convergence_map, nside_out=self.n_side) #power??
+                else:
+                    raise ValueError("n_side for processing cannot exceed the original n_side of the map.")
+
+            # Sum contributions
+            print(f"Calculating convergence contribution from {map_file}... \n")
             mask = self.snapshots < snapshot
+            # mask is a mask to be applied to the halo list. It is essentially the list of indices of the halos
+            # that have a redshift greater than the z_i taken in the loop.
             l_weights = lens_weight(z_l, self.redshifts[mask])
             convergence_halos[mask] += l_weights * convergence_map[self.pixels[mask]]
 
@@ -393,6 +408,10 @@ class Halos:
             del convergence_map
             del mask
             del l_weights
-
+            gc.collect()
 
         return convergence_halos
+
+    def get_halo(self, i):
+        return SingleHalo(self.theta[i], self.phi[i], self.pixels[i],
+                   self.snapshots[i], self.redshifts[i], self.convergence[i])
