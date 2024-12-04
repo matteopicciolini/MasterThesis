@@ -1,11 +1,12 @@
 import os
 import numpy as np
-from multiprocessing import Pool
+#from multiprocessing import Pool
 from astropy.cosmology import LambdaCDM, z_at_value
 import healpy as hp
 import astropy.units as u
 import astropy.constants as astro
-from tqdm import tqdm
+#from tqdm import tqdm
+from scipy.interpolate import interp1d
 
 def compute_z(args):
     """
@@ -45,10 +46,11 @@ class Cosmo:
         Hubble parameter normalization factor (dimensionless).
     """
 
-    def __init__(self):
+    def __init__(self, path=""):
         """
         Initialize the cosmological model with standard ΛCDM parameters.
         """
+        # COSMO
         OmegaCDM = 0.27  # Cold dark matter density
         OmegaBr = 0.05   # Baryonic matter density
         OmegaNeu = 0.00  # Neutrino density (not used but could be added later)
@@ -56,33 +58,83 @@ class Cosmo:
         self.h_Hubble = 0.67
         self.cosmo = LambdaCDM(H0=self.h_Hubble * 100, Om0=OmegaCDM + OmegaBr, Ode0=OmegaLambda)
 
-    def z_from_comoving_distance(self, distance, z_min, z_max):
-        """
-        Compute redshifts from an array of comoving distances using parallel processing.
+        # dati
 
-        Parameters
-        ----------
-        distance : array-like
-            Array of comoving distances in kpc.
-        z_min : float
-            Minimum redshift for search range.
-        z_max : float
-            Maximum redshift for search range.
+        data = np.loadtxt(f"{path}new_cosmoint_results.txt", skiprows=1)
 
-        Returns
-        -------
-        np.ndarray
-            Array of redshift values corresponding to the input distances.
-        """
-        max_ = len(distance)
-        args = [(d, self.cosmo, z_min, z_max, self.h_Hubble) for d in distance]  # Argument tuples
-        with Pool(processes=4) as p, tqdm(total=max_, mininterval=10) as pbar:
-            result = []
-            # Parallelized computation of redshifts
-            for res in p.imap(compute_z, args):
-                result.append(res)
-                pbar.update()
-            return np.array(result)
+        # Column names corresponding to the data
+        self.columns = ['snap', 'z', 'distance', 'xstart', 'xend',
+                        'zstart', 'zend', 'dx', 'boxes', 'cmb_weight']
+
+        # Create a dictionary of data columns as numpy arrays
+        self.data = {name: data[:, i] for i, name in enumerate(self.columns)}
+
+        # Create dictionaries for quick access based on `z` and `snap` values
+        self.z_index = {z: idx for idx, z in enumerate(self.data['z'])}
+        self.snap_index = {snap: idx for idx, snap in enumerate(self.data['snap'])}
+
+        # funzioni di interpolazione
+
+        D = np.concatenate((self.data['distance'], self.data['xend']))
+        red = np.concatenate((self.data['z'], self.data['zend']))
+
+        # Ordinamento
+        sorted_indices = np.argsort(red)
+        z_sorted = red[sorted_indices]
+        distance_sorted = D[sorted_indices]
+
+        # Rimuovere duplicati usando numpy
+        unique_z, unique_indices = np.unique(z_sorted, return_index=True)
+        unique_distance = distance_sorted[unique_indices]
+        # Creazione dell'interpolazione
+        self.redshift2distance = interp1d(
+            unique_distance,
+            unique_z,
+            kind='cubic',
+            fill_value="extrapolate"
+        )
+
+        self.distance2redshift = interp1d(
+            unique_z,
+            unique_distance,
+            kind='cubic',
+            fill_value="extrapolate"
+        )
+
+
+    #@staticmethod
+    #@np.vectorize
+    #def calculate_z(cosmo, distance, zmin, zmax, h_hubble):
+    #    return z_at_value(cosmo.comoving_distance, distance * u.kpc / h_hubble, zmin=zmin, zmax=zmax)
+
+
+    #def z_from_comoving_distance(self, distance, z_min, z_max):
+    #    """
+    #    Compute redshifts from an array of comoving distances using parallel processing.
+
+    #    Parameters
+    #    ----------
+    #    distance : array-like
+    #        Array of comoving distances in kpc.
+    #    z_min : float
+    #        Minimum redshift for search range.
+    #    z_max : float
+    #        Maximum redshift for search range.
+
+    #    Returns
+    #    -------
+    #    np.ndarray
+    #        Array of redshift values corresponding to the input distances.
+    #    """
+    #    max_ = len(distance)
+    #    args = [(d, self.cosmo, z_min, z_max, self.h_Hubble) for d in distance]  # Argument tuples
+    #    with Pool(processes=4) as p, tqdm(total=max_, mininterval=10) as pbar:
+    #        result = []
+    #        # Parallelized computation of redshifts
+    #        for res in p.imap(compute_z, args):
+    #            result.append(res)
+    #            pbar.update()
+    #        return np.array(result)
 
     def lens_weight(self, z_l, z_s=1100):
         """
@@ -136,50 +188,11 @@ class Cosmo:
         mathcal_H = a_z * H_z  # Conformal Hubble parameter
         return mathcal_H
 
+    def redshift_from_distance(self, distance):
+        return self.redshift2distance(distance)
 
-import numpy as np
-
-class SnapsInfo:
-    """
-    A class to manage snapshot information from a text file and provide
-    convenient access to data based on redshift (`z`) or snapshot index (`snap`).
-
-    Attributes
-    ----------
-    columns : list of str
-        List of column names in the data.
-    data : dict
-        Dictionary of data columns, where keys are column names and values
-        are numpy arrays.
-    z_index : dict
-        Dictionary mapping redshift values (`z`) to their corresponding row index.
-    snap_index : dict
-        Dictionary mapping snapshot indices (`snap`) to their corresponding row index.
-    """
-
-    def __init__(self, path=""):
-        """
-        Initialize the SnapsInfo object by loading data from a file.
-
-        Parameters
-        ----------
-        path : str, optional
-            Path to the directory containing the `new_cosmoint_results.txt` file.
-            Defaults to the current directory.
-        """
-        # Load data from the text file, skipping the header row
-        data = np.loadtxt(f"{path}new_cosmoint_results.txt", skiprows=1)
-
-        # Column names corresponding to the data
-        self.columns = ['snap', 'z', 'distance', 'xstart', 'xend',
-                        'zstart', 'zend', 'dx', 'boxes', 'cmb_weight']
-
-        # Create a dictionary of data columns as numpy arrays
-        self.data = {name: data[:, i] for i, name in enumerate(self.columns)}
-
-        # Create dictionaries for quick access based on `z` and `snap` values
-        self.z_index = {z: idx for idx, z in enumerate(self.data['z'])}
-        self.snap_index = {snap: idx for idx, snap in enumerate(self.data['snap'])}
+    def distance_from_redshift(self, redshift):
+        return self.distance2redshift(redshift)
 
     def _validate_column(self, column_name):
         """
@@ -399,11 +412,10 @@ class Catalog(Cosmo):
             path (str, optional): Path to the directory containing snapshot files.
         """
         super().__init__()
-        self.info = SnapsInfo(path=path)
         self.snapshot_number = snapshot_number
-        self.redshift = self.info.from_snapshot_get(snapshot_number, 'z')
-        self.z_start = self.info.from_snapshot_get(snapshot_number, 'zstart')
-        self.z_end = self.info.from_snapshot_get(snapshot_number, 'zend')
+        self.redshift = self.from_snapshot_get(snapshot_number, 'z')
+        self.z_start = self.from_snapshot_get(snapshot_number, 'zstart')
+        self.z_end = self.from_snapshot_get(snapshot_number, 'zend')
         self.path = path
 
         if halos is None:
@@ -509,8 +521,8 @@ class Catalog(Cosmo):
             n_side (int): The resolution parameter for the healpy maps. Default is 4096.
         """
         for snapshot in range(62, self.snapshot_number - 1, -1):
-            cmb_weight = self.info.from_snapshot_get(snapshot, 'cmb_weight')
-            z_lens = self.info.from_snapshot_get(snapshot, 'z')
+            cmb_weight = self.from_snapshot_get(snapshot, 'cmb_weight')
+            z_lens = self.from_snapshot_get(snapshot, 'z')
 
             print(f"-------------- {z_lens, snapshot} --------------")
             map_file = f'{self.path}KappaMap_snap_{snapshot:03d}.DM.seed_100672.fits'
@@ -536,7 +548,22 @@ class Catalog(Cosmo):
 
         This method updates the 'redshift' field for all halos using the `z_from_comoving_distance` method.
         """
-        self.halos['redshift'] = self.z_from_comoving_distance(self.halos['dr'], self.z_start, self.z_end)
+        #calculate_z = lambda distance: z_at_value(
+        #    self.cosmo.comoving_distance,
+        #    distance * u.kpc / self.h_Hubble,
+        #    zmin=self.z_start - 1e-5,
+        #    zmax=self.z_end +1e-5,
+        #)
+        #self.halos['redshift'] = list(
+        #    map(
+        #        calculate_z,
+        #        tqdm(self.halos['dr'], mininterval=10, desc="Computing redshift")
+        #    )
+        #)
+        self.halos['redshift'] = self.redshift_from_distance(self.halos['dr'])
+        #self.halos['redshift'] = self.z_from_comoving_distance(self.halos['dr'], self.z_start, self.z_end)
+        #self.halos['redshift'] = self.calculate_z(self.cosmo, self.halos['dr'], self.z_start, self.z_end, self.h_Hubble)
+
 
     def compute_luminosity_distance(self):
         """
@@ -562,9 +589,7 @@ class Catalog(Cosmo):
         This method updates the 'luminosity_distance_bert_convergence' field, which is the negative of
         the convergence.
         """
-        self.halos['luminosity_distance_bert_convergence'] = (
-                0 - self.halos['convergence']
-        )
+        self.halos['luminosity_distance_bert_convergence'] =  - self.halos['convergence']
 
     def compute_bertacca_v_parallel(self):
         """
@@ -585,7 +610,9 @@ class Catalog(Cosmo):
         distance and the Bertacca convergence and velocity contributions.
         """
         self.halos['luminosity_distance_bertacca'] = (
-                self.halos['luminosity_distance'] * (1 + self.halos['luminosity_distance_bert_convergence'] + self.halos['luminosity_distance_bert_v_parallel'])
+                self.halos['luminosity_distance'] * (1 + self.halos['luminosity_distance_bert_convergence']
+                                                     #+ self.halos['luminosity_distance_bert_v_parallel']
+                                                     )
         )
 
     def compute_all(self, n_side = 4096):
@@ -661,6 +688,7 @@ class Catalog(Cosmo):
         if duplicates > 0:
             print(f"Same pixel encountered {duplicates} times.")
         return bertacca_map
+
 
     @property
     def theta(self):
