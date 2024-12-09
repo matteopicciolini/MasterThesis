@@ -1,12 +1,14 @@
 import os
 import numpy as np
-#from multiprocessing import Pool
+from multiprocessing import Pool
 from astropy.cosmology import LambdaCDM, z_at_value
 import healpy as hp
 import astropy.units as u
 import astropy.constants as astro
-#from tqdm import tqdm
+from tqdm import tqdm
 from scipy.interpolate import interp1d
+import matplotlib.pyplot as plt
+from scipy.interpolate import make_interp_spline
 
 def compute_z(args):
     """
@@ -51,6 +53,7 @@ class Cosmo:
         Initialize the cosmological model with standard ΛCDM parameters.
         """
         # COSMO
+        
         OmegaCDM = 0.27  # Cold dark matter density
         OmegaBr = 0.05   # Baryonic matter density
         OmegaNeu = 0.00  # Neutrino density (not used but could be added later)
@@ -73,68 +76,76 @@ class Cosmo:
         self.z_index = {z: idx for idx, z in enumerate(self.data['z'])}
         self.snap_index = {snap: idx for idx, snap in enumerate(self.data['snap'])}
 
-        # funzioni di interpolazione
+        self.redshift2distance = None
+        self.distance2redshift = None
+        self._compute_correction()
+        
 
-        D = np.concatenate((self.data['distance'], self.data['xend']))
-        red = np.concatenate((self.data['z'], self.data['zend']))
+    def _compute_correction(self):
+        comoving_distances_tab = np.concatenate((self.data['distance'], self.data['xend']))
+        redshift_tab = np.concatenate((self.data['z'], self.data['zend']))
 
         # Ordinamento
-        sorted_indices = np.argsort(red)
-        z_sorted = red[sorted_indices]
-        distance_sorted = D[sorted_indices]
+        sorted_indices = np.argsort(redshift_tab)
+        redshift_tab_sorted = redshift_tab[sorted_indices]
+        comoving_distances_rab_sorted = comoving_distances_tab[sorted_indices]
 
         # Rimuovere duplicati usando numpy
-        unique_z, unique_indices = np.unique(z_sorted, return_index=True)
-        unique_distance = distance_sorted[unique_indices]
+        unique_z, unique_indices = np.unique(redshift_tab_sorted, return_index=True)
+        unique_distance = comoving_distances_rab_sorted[unique_indices]
+        
         # Creazione dell'interpolazione
-        self.redshift2distance = interp1d(
-            unique_distance,
-            unique_z,
-            kind='cubic',
-            fill_value="extrapolate"
-        )
+        self.redshift2distance = make_interp_spline(unique_z, unique_distance, k = 3)
+        #self.redshift2distance = interp1d(unique_z, unique_distance, kind='cubic', fill_value="extrapolate")
+        self.distance2redshift = make_interp_spline(unique_distance, unique_z, k = 3)
+        #self.distance2redshift = interp1d(unique_distance, unique_z, kind='cubic', fill_value="extrapolate")
 
-        self.distance2redshift = interp1d(
-            unique_z,
-            unique_distance,
-            kind='cubic',
-            fill_value="extrapolate"
-        )
+        distance = self.data['distance'][1:]
+        z = self.data['z'][1:]
+        z_min = self.data['zstart'][1:]
+        z_max = self.data['zend'][1:]
 
+        redshift_calc = z_at_value(self.cosmo.comoving_distance, 
+                                   distance * u.kpc / self.h_Hubble, zmin=z_min, zmax=z_max)
 
+        z_correction = z / redshift_calc
+        z_correction = np.concatenate(([1.], z_correction))
+        self.data['z_correction'] = z_correction
+        
+        
     #@staticmethod
     #@np.vectorize
     #def calculate_z(cosmo, distance, zmin, zmax, h_hubble):
     #    return z_at_value(cosmo.comoving_distance, distance * u.kpc / h_hubble, zmin=zmin, zmax=zmax)
 
 
-    #def z_from_comoving_distance(self, distance, z_min, z_max):
-    #    """
-    #    Compute redshifts from an array of comoving distances using parallel processing.
+    def z_from_comoving_distance(self, distance, z_min, z_max):
+        """
+        Compute redshifts from an array of comoving distances using parallel processing.
 
-    #    Parameters
-    #    ----------
-    #    distance : array-like
-    #        Array of comoving distances in kpc.
-    #    z_min : float
-    #        Minimum redshift for search range.
-    #    z_max : float
-    #        Maximum redshift for search range.
+        Parameters
+        ----------
+        distance : array-like
+            Array of comoving distances in kpc.
+        z_min : float
+            Minimum redshift for search range.
+        z_max : float
+            Maximum redshift for search range.
 
-    #    Returns
-    #    -------
-    #    np.ndarray
-    #        Array of redshift values corresponding to the input distances.
-    #    """
-    #    max_ = len(distance)
-    #    args = [(d, self.cosmo, z_min, z_max, self.h_Hubble) for d in distance]  # Argument tuples
-    #    with Pool(processes=4) as p, tqdm(total=max_, mininterval=10) as pbar:
-    #        result = []
-    #        # Parallelized computation of redshifts
-    #        for res in p.imap(compute_z, args):
-    #            result.append(res)
-    #            pbar.update()
-    #        return np.array(result)
+        Returns
+        -------
+        np.ndarray
+            Array of redshift values corresponding to the input distances.
+        """
+        max_ = len(distance)
+        args = [(d, self.cosmo, z_min, z_max, self.h_Hubble) for d in distance]  # Argument tuples
+        with Pool(processes=4) as p, tqdm(total=max_, mininterval=10) as pbar:
+            result = []
+            # Parallelized computation of redshifts
+            for res in p.imap(compute_z, args):
+                result.append(res)
+                pbar.update()
+            return np.array(result)
 
     def lens_weight(self, z_l, z_s=1100):
         """
@@ -189,10 +200,10 @@ class Cosmo:
         return mathcal_H
 
     def redshift_from_distance(self, distance):
-        return self.redshift2distance(distance)
+        return self.distance2redshift(distance)
 
     def distance_from_redshift(self, redshift):
-        return self.distance2redshift(redshift)
+        return self.redshift2distance(redshift)
 
     def _validate_column(self, column_name):
         """
@@ -209,7 +220,8 @@ class Cosmo:
             If the column name is not valid.
         """
         if column_name not in self.columns:
-            raise ValueError(f"Column '{column_name}' not found. Valid columns are: {self.columns}")
+            if column_name != 'z_correction':
+                raise ValueError(f"Column '{column_name}' not found. Valid columns are: {self.columns}")
 
     def from_z_get(self, z_value, column_name):
         """
@@ -564,6 +576,10 @@ class Catalog(Cosmo):
         #self.halos['redshift'] = self.z_from_comoving_distance(self.halos['dr'], self.z_start, self.z_end)
         #self.halos['redshift'] = self.calculate_z(self.cosmo, self.halos['dr'], self.z_start, self.z_end, self.h_Hubble)
 
+    def compute_redshift_exactly(self):
+        #self.halos['redshift']
+        return (self.z_from_comoving_distance(self.halos['dr'], self.z_start, self.z_end)
+                                  * self.from_z_get(self.redshift, 'z_correction'))
 
     def compute_luminosity_distance(self):
         """
